@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+for fcst in 18 19 20 21 22; do
+    for hour in 00 01 02 03 04; do
+        ncks -O --mk_rec_dmn time hrrr.20171103.t${fcst}z.f${hour}.nc hrrr.20171103.t${fcst}z.f${hour}.nc
+    done
+
+    ncrcat -O hrrr.20171103.t${fcst}z.f*.nc hrrr.20171103.t${fcst}z.nc
+
+done
