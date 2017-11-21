@@ -1,0 +1,396 @@
+"""
+
+To use, you should just be able to directly make the final, concatenated dataset,
+for example:
+
+    $ snakemake -j 4 integrated/int.chicago.concat.nc
+
+"""
+
+from ccpy.util import wget
+import pandas as pd
+
+from itertools import product
+from config import *
+
+#: Default encoding for netCDF, enabling basic ZLIB compression on a default
+#: field with name 'data'
+DEFAULT_ENCODING = {
+    'data': {'complevel': 1, 'zlib': True, 'shuffle': True}
+}
+
+
+rule all_data:
+    """ Create all concatenated data netCDF files. """
+    input:
+        "mrms/a2m." + NAME + ".concat.nc",
+        "n0q/n0q." + NAME + ".concat.nc",
+        "integrated/int." + NAME + ".concat.nc"
+
+
+
+## GENERIC RULES
+rule convert_png_to_nc:
+    """ Convert a PNG with associated WLD file to a subsetted netCDF file """
+    input: "{basedir}/{basename}.png"
+    output: "{basedir}/{basename}." + NAME + ".nc"
+    shell:
+        """
+        python png_to_nc.py {input[0]} --name {NAME} --geometry {CLAT} {CLON} {DLAT} {DLON}
+        """
+
+## DATA-SPECIFIC RULES
+rule download_mrms:
+    """ Download archived PrecipRate (a2m) fields from IEM. """
+    output: dynamic("mrms/a2m_{basename}.png")
+    run:
+        if not os.path.exists('mrms'):
+            os.makedirs('mrms')
+
+        root_url = (
+            "https://mesonet.agron.iastate.edu/"
+            "archive/data/{year:4d}/{month:02d}/{day:02d}/GIS/mrms/"
+        )
+        fn_base = "a2m_{year:4d}{month:02d}{day:02d}{hour:02d}{minute:02d}"
+
+        for ts, ext in product(MRMS_TIMES, ['png', 'wld']):
+            url = root_url + fn_base + ".{ext}"
+            url = url.format(year=ts.year, month=ts.month, day=ts.day,
+                             hour=ts.hour, minute=ts.minute, ext=ext)
+            local_fn = "mrms/" + fn_base + ".{ext}"
+            local_fn = local_fn.format(year=ts.year, month=ts.month, day=ts.day,
+                                        hour=ts.hour, minute=ts.minute, ext=ext)
+
+            wget(url, filename=local_fn)
+
+
+rule concat_mrms:
+    """ Concenate subsetted MRMS/a2m netCDF files into a single dataset. """
+    input: dynamic("mrms/a2m_{basename}." + NAME + ".nc")
+    output: "mrms/a2m." + NAME + ".concat.nc"
+    run:
+        import xarray as xr
+
+        dss = []
+        for fn, ts in zip(sorted(input), MRMS_TIMES):
+            print(fn, ts)
+            ds = xr.open_dataset(fn).squeeze()
+            ds['time'] = [ts, ]
+            dss.append(ds)
+
+        ds = xr.concat(dss, 'time')
+
+        print(ds)
+        ds.to_netcdf(output[0], encoding=DEFAULT_ENCODING)
+
+
+rule download_n0q:
+    """ Download archived NEXRAD reflectivity (n0q) fields from IEM. """
+    output: dynamic("n0q/n0q_{basename}.png")
+    run:
+        if not os.path.exists("n0q"):
+            os.makedirs('n0q')
+
+        root_url = (
+            "https://mesonet.agron.iastate.edu/"
+            "archive/data/{year:4d}/{month:02d}/{day:02d}/GIS/uscomp/"
+        )
+        fn_base = "n0q_{year:4d}{month:02d}{day:02d}{hour:02d}{minute:02d}"
+
+        for ts, ext in product(N0Q_TIMES, ['png', 'wld']):
+            url = root_url + fn_base + ".{ext}"
+            url = url.format(year=ts.year, month=ts.month, day=ts.day,
+                             hour=ts.hour, minute=ts.minute, ext=ext)
+            local_fn = "n0q/" + fn_base + ".{ext}"
+            local_fn = local_fn.format(year=ts.year, month=ts.month, day=ts.day,
+                                        hour=ts.hour, minute=ts.minute, ext=ext)
+
+            wget(url, filename=local_fn)
+
+
+rule concat_n0q:
+    """ Concenate subsetted NEXRAD n0q files into a single dataset. """
+    input: dynamic("n0q/n0q_{basename}." + NAME + ".nc")
+    output: "n0q/n0q." + NAME + ".concat.nc"
+    run:
+        import xarray as xr
+
+        dss = []
+        for fn, ts in zip(sorted(input), N0Q_TIMES):
+            print(fn, ts)
+            ds = xr.open_dataset(fn).squeeze()
+            ds['time'] = [ts, ]
+            dss.append(ds)
+
+        ds = xr.concat(dss, 'time')
+
+        print(ds)
+        ds.to_netcdf(output[0])
+
+
+rule download_integrated:
+    """ Download ClimaCell Integrated Layer PNGs """
+    output: dynamic("integrated/{basename}.png")
+    run:
+        import subprocess
+
+        if not os.path.exists('integrated'):
+            os.makedirs('integrated')
+
+        for ts in INTEGRATED_TIMES[:-1]:
+            BUCKET_PATH = (
+                "gs://integrated-layer-pngs-climacell/"
+                "{year:04d}/{month:02d}/{day:02d}/{hour:02d}/"
+                "*.png"
+            ).format(
+                year=ts.year, month=ts.month, day=ts.day,
+                hour=ts.hour,
+            )
+            subprocess.call(["gsutil", "-m", "cp", BUCKET_PATH, "integrated/"])
+
+
+rule copy_integrated_wld:
+    """ Copy a reference WLD file with the Integrated Layer geospatial information
+    for use with GIS applications """
+    input: "integrated/{basename}.png"
+    output: "integrated/{basename}.wld"
+    shell:
+        "cp sample.wld {output}"
+
+
+rule integrated_png_to_nc:
+    """ Subset an Integrated Layer PNG, and convert to a netCDF file """
+    input: png="integrated/{basename}.png", wld="integrated/{basename}.wld"
+    output: "integrated/{basename}.nc"
+    run:
+        import xarray as xr
+
+        clat, clon = CLAT, CLON
+        dlat, dlon = DLAT, DLON
+
+        da = xr.open_rasterio(input['png'])
+        da = da.drop('band').squeeze()
+        da = da.rename({'x': 'lon', 'y': 'lat'})
+        attrs = da.attrs.copy()
+        da.attrs = {}
+        da.name = 'data'
+        ds = da.to_dataset()
+        # ds = ds.expand_dims("time")
+        # ds['time'] = [int(wildcards['basename']), ]
+        ds.attrs.update(attrs)
+        ds.attrs.update({
+            # 'source': input['png'],
+            'convention': 'CF-1.6'
+        })
+
+        ds = ds.sel(lat=slice(clat+dlat, clat-dlat),
+                    lon=slice(clon-dlon, clon+dlon))
+
+        ds.to_netcdf(output[0], engine='netcdf4', format='NETCDF4',
+                     unlimited_dims=['time', ],
+                     encoding={'data':
+                        {'complevel': 1, 'zlib': True, 'shuffle': True}
+                    }
+        )
+
+
+rule concat_integrated:
+    """ Concatenate a collection of subsetted Integrated Layer netCDF files """
+    input: dynamic("integrated/{basename}.nc")
+    output: "integrated/int." + NAME + ".concat.nc"
+    run:
+        import xarray as xr
+
+        dss = []
+        for i, fn in enumerate(sorted(input)):
+            basefn, ext = os.path.splitext(fn)
+            bits = basefn.split("/")
+            ts_str = bits[-1]
+            ts = pd.datetime.strptime(ts_str, "%Y%m%dT%H%M%SZ")
+            print(fn, ts)
+            ds = xr.open_dataset(fn).squeeze()
+            ds['time'] = [ts, ]
+            dss.append(ds)
+
+        ds = xr.concat(dss, 'time')
+
+        print(ds)
+        ds.to_netcdf(output[0])
+
+
+rule download_nowcasts:
+    """ Download a set of archival NowCast PNGs from ClimaCell """
+    output: dynamic("nowcasts/{case}/{basename}.png")
+    run:
+        import subprocess
+
+        for i, ts in enumerate(NOWCAST_TIMES, start=1):
+            dd = "nowcasts/{:02d}".format(i)
+
+            print(dd)
+
+            if not os.path.exists(dd):
+                os.makedirs(dd)
+
+            BUCKET_PATH = (
+                "gs://integrated-layer-nowcast/"
+                "{year:04d}/{month:02d}/{day:02d}/{hour:02d}/"
+                "{year:04d}{month:02d}{day:02d}T{hour:02d}{minute:02d}{second:02d}Z/"
+                "*.png"
+            ).format(
+                year=ts.year, month=ts.month, day=ts.day, minute=ts.minute,
+                hour=ts.hour, second=ts.second
+            )
+            subprocess.call(["gsutil", "-m", "cp", BUCKET_PATH, dd])
+
+
+rule copy_nowcasts_wld:
+    """ Copy a reference WLD file with the NowCast geospatial information
+    for use with GIS applications """
+    input: "nowcasts/{case}/{basename}.png"
+    output: "nowcasts/{case}/{basename}.wld"
+    shell:
+        "cp sample.wld {output}"
+
+
+rule nowcasts_png_to_nc:
+    """ Subset NowCast PNG files and convert to NetCDF """
+    input: png="nowcasts/{case}/{basename}.png", wld="nowcasts/{case}/{basename}.wld"
+    output: "nowcasts/{case}/{basename}.nc"
+    run:
+        import xarray as xr
+
+        clat, clon = CLAT, CLON
+        dlat, dlon = DLAT, DLON
+
+        da = xr.open_rasterio(input['png'])
+        da = da.drop('band').squeeze()
+        da.name = 'nowcast'
+        da = da.rename({'x': 'lon', 'y': 'lat'})
+        attrs = da.attrs.copy()
+        da.attrs = {}
+        ds = da.to_dataset()
+        ds.attrs.update(attrs)
+        ds.attrs.update({
+            # 'source': input['png'],
+            'convention': 'CF-1.6'
+        })
+
+        ds = ds.sel(lat=slice(clat+dlat, clat-dlat),
+                    lon=slice(clon-dlon, clon+dlon))
+
+        ds.to_netcdf(output[0], engine='netcdf4', format='NETCDF4',
+                     unlimited_dims=['time', ],
+                     encoding={'nowcast':
+                        {'complevel': 1, 'zlib': True, 'shuffle': True}
+                    }
+        )
+
+
+rule concat_nowcast:
+    """ Concatenate subsetted NowCast netCDF files """
+    input: dynamic("nowcasts/{case}/{basename}.nc")
+    output: "nowcasts/{case}." + NAME + ".concat.nc"
+    run:
+        import xarray as xr
+
+        dt = pd.Timedelta("300S")
+        ts0 = NOWCAST_TIMES[int(wildcards['case'])-1]
+        dss = []
+        for i, fn in enumerate(sorted(input)):
+            ts = ts0 + dt*i
+            print(fn, ts)
+            ds = xr.open_dataset(fn).squeeze()
+            ds['time'] = [ts, ]
+            dss.append(ds)
+
+        ds = xr.concat(dss, 'time')
+
+        print(ds)
+        ds.to_netcdf(output[0])
+
+
+rule download_hrrr:
+    """ Download a triangular matrix of lagged HRRR forecasts. """
+    params:
+        t_begin=TIME_BEGIN, t_end=TIME_END
+    script: "download_hrrr.py"
+
+
+rule subset_hrrr:
+    """ Subset and convert download HRRR output to netCDF """
+    input: "hrrr/{basename}.grib2"
+    output: dynamic("hrrr/{basename}.nc")
+    run:
+        import xarray as xr
+        ds = xr.open_dataset(input[0], engine='pynio')
+        ds = ds.rename({'gridlat_0': 'lat', 'gridlon_0': 'lon'})
+        # ds = ds[['lon', 'lat', 'PRATE_P0_L1_GLC0', 'REFD_P0_L103_GLC0',
+        #          'USTM_P0_2L103_GLC0', 'VSTM_P0_2L103_GLC0',
+        #          'UGRD_P0_L103_GLC0', 'VGRD_P0_L103_GLC0']]
+
+        ll_lon, ll_lat, ur_lon, ur_lat = bounds
+        ds = ds.where((ll_lat < ds.lat) & (ds.lat < ur_lat) &
+                      (ll_lon < ds.lon) & (ds.lon < ur_lon), drop=True)
+        # ds = ds.sel(lv_HTGL8=1000.)
+        ds = ds.squeeze()
+
+        for v in ds.data_vars:
+            ds[v].encoding = {'complevel': 1, 'zlib': True}
+
+        # Capture the timestamp
+        match = HRRR_RE.match(input[0])
+        gd = match.groupdict()
+
+        year = int(gd['year'])
+        month = int(gd['month'])
+        day = int(gd['day'])
+        hour = int(gd['hour'])
+        fcst_hour = int(gd['fcst_hour'])
+
+        # Set up the ensemble info - timestamp and fcst run
+        ds = ds.expand_dims(['fcst', 'time'])
+        # ts = pd.Timestamp(year, month, day, hour+fcst_hour, 0, 0)
+        # print(ts)
+        ts = pd.Timestamp(year, month, day, hour+fcst_hour, 0, 0)
+        ts_str = ts.strftime("%Y-%m-%d %H:00:00")
+        ds['time'] = [ts, ]
+        # ds['time'] = [fcst_hour, ]
+        # ds['time'].attrs = {'units': 'hours since {}'.format(ts_str)}
+        ds['fcst'] = [hour, ]
+
+        print(ds['time'])
+        print(ds['fcst'])
+
+        ds.to_netcdf(output[0], unlimited_dims=['time', ])
+
+
+def grib2_ens_to_netcdf(wildcards):
+    """ Helper function to catalogue all grib2 files and note them as netCDF """
+    import glob
+    fns = glob.glob("hrrr/*.grib2")
+    fns = [fn.replace(".grib2", ".nc") for fn in fns]
+    return fns
+
+
+rule concat_hrrr:
+    """ Concatenate an ensemble of HRRR output into a single file. """
+    input: grib2_ens_to_netcdf
+    output:
+        "hrrr/hrrr.ensemble.nc"
+    run:
+        import xarray as xr
+        import glob
+
+        fcst_ds = []
+        for fcst in [18, 19, 20, 21, 22]:
+            fns = sorted(glob.glob("hrrr/*.t{}z.*.nc".format(fcst)))
+            dss = [xr.open_dataset(fn, decode_times=True) for fn in fns]
+            try:
+                ds = xr.concat(dss, 'time')
+                fcst_ds.append(ds)
+            except:
+                continue
+        ds = xr.concat(fcst_ds, 'fcst')
+
+        ds.to_netcdf(output[0])
