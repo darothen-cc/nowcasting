@@ -1,10 +1,13 @@
 
 import re
-import glob
 import pandas as pd
-# from ccpy import wget
 
-#: HRRR Regex
+from itertools import product
+
+from ccpy.util import wget
+from config import *
+
+#: HRRR Regex - filename on CHPC server
 HRRR_PAT = (
     "hrrr/hrrr\."
     "(?P<year>\d{4})"
@@ -16,12 +19,9 @@ HRRR_PAT = (
 )
 HRRR_RE = re.compile(HRRR_PAT)
 
-#: Rectangular bounding box for region of interest
-bounds = [-73.5, 40.0, -69.5, 44.0]
-
-#: Time-range of interest
-t_begin = pd.Timestamp(2017, 11, 3, 19)
-t_end = pd.Timestamp(2017, 11, 3, 22)
+MRMS_TIMES = pd.date_range(TIME_BEGIN, TIME_END, freq='120S')
+N0Q_TIMES = pd.date_range(TIME_BEGIN, TIME_END, freq='300S')
+INTEGRATED_TIMES = pd.date_range(TIME_BEGIN, TIME_END, freq='1H')
 
 PNGS = glob.glob("*/*.png", recursive=True)
 NCS = [png.replace("png", "nc") for png in PNGS]
@@ -51,7 +51,6 @@ lcref_timesteps = pd.date_range(t_begin, t_end, freq='120S')
 lcref_filename = ["lcref/lcref_{ts}.png".format(ts=x.strftime(IEM_TIME_FMT))
                   for x in lcref_timesteps]
 
-
 def iem_raster_files(wildcards):
     """ Create the URLs corresponding to a given raster product on IEM's
     GIS archives. """
@@ -77,7 +76,8 @@ def iem_raster_files(wildcards):
 rule download_from_iem:
     """ Download an archived raster product from IEM. """
     output:
-        "{product}/{product}_{ts}.png", "{product}/{product}_{ts}.wld"
+        dynamic("{product}/{product}_{ts}.png"),
+        dynamic("{product}/{product}_{ts}.wld")
     params:
         inputs=iem_raster_files
     shell:
@@ -89,7 +89,7 @@ rule download_from_iem:
 rule subset_png_to_nc:
     """ Subset a raster PNG/WLD file to a specific bounding box. """
     input:
-        "{product}/{product}_{ts}.png"
+        dynamic("{product}/{product}_{ts}.png")
     output:
         "{product}/{product}_{ts}.nc"
     run:
@@ -133,16 +133,10 @@ rule concat_pngs:
         ncrcat {input} {output[0]}
         """
 
-# rule subset_gdal:
-#     input:
-#         "{product}/{product}_{ts}.png"
-#     output:
-#         "{product}/{product}_{ts}.nc"
-
 rule download_hrrr:
     params:
-        t_begin=t_begin,
-        t_end=t_end
+        t_begin=TIME_BEGIN,
+        t_end=TIME_END
     script: "download_hrrr.py"
 
 rule subset_hrrr:
@@ -233,7 +227,6 @@ rule all_pngs_to_ncs:
 rule all_concats:
     input:
         ["n0q.subset.nc", "a2m.subset.nc", "lcref.subset.nc"]
-
 
 rule all_grib2_to_nc:
     input: dynamic("hrrr/{basename}.nc")

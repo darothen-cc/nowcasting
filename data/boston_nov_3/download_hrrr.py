@@ -1,6 +1,7 @@
 """ Snakefile sentinel script for downloading a 'triangular' HRRR dataset.
 
 """
+import os
 import pandas as pd
 from ccpy.util import wget
 
@@ -42,4 +43,7 @@ def download_hrrr(t_begin, t_end):
 if __name__ == "__main__":
     print(snakemake)
     print(snakemake.params)
+
+    if not os.path.exists("hrrr"):
+        os.makedirs("hrrr")
     download_hrrr(snakemake.params['t_begin'], snakemake.params['t_end'])
