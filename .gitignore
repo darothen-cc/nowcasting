@@ -18,6 +18,7 @@ ext/*
 ## Binary / output data types
 *.nc
 *.grib2
+*.wld
 *.png
 *.pdf
 *.log
