@@ -11,6 +11,10 @@
 *hrrr/
 *a2m
 
+## External sources (manually add)
+ext/*
+
+
 ## Binary / output data types
 *.nc
 *.grib2

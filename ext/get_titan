@@ -1,0 +1,2 @@
+# Download TITAN Source Code
+wget ftp://ftp.rap.ucar.edu/pub/titan/distribution/titan-20160117.src.tgz .
