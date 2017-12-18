@@ -1,7 +1,27 @@
 
+## Application
+*.snakemake
+*.idea
+*.ipynb_checkpoints
+*.egg-info
 
+## Data sources
+*n0q/
+*lcref/
+*hrrr/
+*a2m
+
+## Binary / output data types
 *.nc
 *.grib2
 *.png
+*.pdf
+*.log
+*.dot
+*.tmp
 
+## Python
 *.pyc
+
+## Misc
+_output/*
