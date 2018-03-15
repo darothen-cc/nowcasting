@@ -78,6 +78,28 @@ class Node(object):
         else:
             return 1 + np.max([child.depth() for child in self.children])
 
+    @staticmethod
+    def find_deepest_child(tree):
+        """ Bread-first search to find the node in a tree furthest from the root
+        which still contains children. """
+
+        md = 0
+        child = None
+
+        if not tree.children:
+            return child
+
+        for c in tree.children:
+            deg = c.degree()
+            if deg > md:
+                md = deg
+                child = c
+
+        return child
+
+
+
+
 
 def medfilt2d_dataarray(da, dim='time', **kwargs):
     """ Apply scipy.signal.medfilt2d efficiently against a DataArray.
@@ -106,3 +128,5 @@ def medfilt2d_dataarray(da, dim='time', **kwargs):
                           input_core_dims=[[dim, ]],
                           output_core_dims=[[dim, ]]),
                           dask='allowed')
+
+
