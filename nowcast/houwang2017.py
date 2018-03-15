@@ -4,6 +4,14 @@ from Hou and Wang, 2017.
 """
 
 import numpy as np
+from scipy.signal import medfilt2d
+from skimage.measure import label, regionprops
+from skimage.color import label2rgb
+
+import xarray as xr
+
+#: Algorithm reflectivity level-set thresholds, in dBz
+_THRESHOLDS = [0, 20, 25, 30, 35, 40, 45, 50, 55, 60]
 
 
 class Node(object):
@@ -69,3 +77,32 @@ class Node(object):
             return 1
         else:
             return 1 + np.max([child.depth() for child in self.children])
+
+
+def medfilt2d_dataarray(da, dim='time', **kwargs):
+    """ Apply scipy.signal.medfilt2d efficiently against a DataArray.
+
+    Parameters
+    ----------
+    da : DataArray
+        Data to be filtered
+    dim : str
+        Dimension along-which to apply the filter
+
+    Returns
+    -------
+    Original datarray with the 2d median filter applied along the requested
+    dimension.
+
+    """
+
+    def looped_medfilt2d(data, **kwargs):
+        """ Apply `medfilt2d` to each slice along the last dimension of
+        a given ndarray """
+        n = data.shape[-1]
+        return np.dstack([medfilt2d(data[...,i], **kwargs) for i in range(n)])
+
+    return xr.apply_ufunc(looped_medfilt2d, da, kwargs=kwargs,
+                          input_core_dims=[[dim, ]],
+                          output_core_dims=[[dim, ]]),
+                          dask='allowed')
