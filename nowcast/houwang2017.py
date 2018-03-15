@@ -7,8 +7,21 @@ import numpy as np
 
 
 class Node(object):
+    """ Simple class for constructing and containing tree-like graphs.
 
-    def __init__(self, parent=None, data=None):
+    Attributes
+    ----------
+    parent : Node, or None
+        The parent of this node on a tree; if 'None', then this is the root
+        of a sub-tree.
+    children : list of Nodes
+        The children which claim this Node as a parent
+    _data : dict
+        A dictionary containing any data attached to this Node
+
+    """
+
+    def __init__(self, parent=None, data={}):
         self.parent = parent
         self.children = []
 
@@ -30,7 +43,7 @@ class Node(object):
         elif self.parent.equals(n):
             return True
         else:
-            return self .parent.is_ancestor(n)
+            return self.parent.is_ancestor(n)
 
     def is_descendant(self, n):
         if not self.children:
