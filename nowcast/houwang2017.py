@@ -4,6 +4,7 @@ from Hou and Wang, 2017.
 """
 
 from itertools import chain
+import warnings
 
 import numpy as np
 from scipy.signal import medfilt2d
@@ -66,6 +67,12 @@ class Node(object):
         else:
             return np.any([child.is_descendant(n) for child in self.children])
 
+    def count(self):
+        counter = 0
+        for _ in self:
+            counter += 1
+        return counter
+
     def degree(self):
         return len(self.children)
 
@@ -101,16 +108,22 @@ class Node(object):
 
     def __iter__(self):
         """ Traverse the structure via the iterator protocol, for convenience """
+
+        # Start with the root ...
+        if not self.is_root():
+            yield self
+
+        # ... and continue on to the children
         for v in chain(
             *map(iter, self.children)
         ):
             yield v
-        yield self
 
 
 def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
     """ Recursively bisect an image to construct the Hou and Wang (2017)
-    tree based on a set of level-set thresholds
+    tree based on a set of level-set thresholds. We assume that the user
+    has already applied the lowest-level threshold (first element).
 
     Parameters
     ----------
@@ -126,38 +139,50 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
     """
 
     # Identify regions where we're below the lowest threshold
-    image_to_label = np.where(image >= thresholds[0], 1, 0)
+    # image_to_label = np.where(image >= thresholds[0], 1, 0)
+    image_to_label = image.where(image > thresholds[0])
 
     # Initialize the head root node
     root = Node(data='root')
     root.nid = 0
 
     def _fit_labels(image, i, parent, count=1):
+        """ Helper function to break a sub-image down into regions for
+        further segmentation, based on iterative thresholding. """
 
         local_count = count+1
 
-        # Don't further segment if the region is small or contains no data.
-        if (np.product(image.shape) < 10) or (np.min(image.shape) == 1):
-            return parent
-
-        # Re-label this image
+        # Re-label this image; because our image segmentation works on identifying
+        # regions with the same pixel values, we apply a threshold to "mask" out
+        # the region of interest for this level of the analysis.
         try:
             _thresh_image = np.where(image >= thresholds[i], 1, 0)
         except:
+            warnings.warn("Something went wrong thresholding image of shape {}"
+                          .format(image.shape))
             return parent
 
-        labels, n = label(_thresh_image, return_num=True)
+        labels, n = label(_thresh_image, return_num=True, connectivity=1)
         image_label_overlay = label2rgb(labels, image=image)
 
-        if n > 0:
+        if n > 0:  # ... if we found sub-regions to label
             regions = regionprops(labels, intensity_image=image)
             V = []
             for region in regions:
+
+                # Don't further segment if the region is small or contains no data.
+                region_shape = region.intensity_image.shape
+                region_size = np.product(region_shape)
+                if (region_size < 10) or (np.min(region_shape) == 1):
+                    continue
+
                 _node = Node(parent,
                              region=region,
                              image_label_overlay=image_label_overlay,
-                             nid=local_count)
+                             nid=local_count,
+                             threshold=thresholds[i])
                 local_count += 1
+
                 V.append(_node)
             parent.children = V
 
@@ -168,7 +193,7 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
 
         return parent
 
-    return _fit_labels(image, i=1, parent=root)
+    return _fit_labels(image_to_label, i=1, parent=root)
 
 
 def threshold_dataarray(da, coords=['y', 'x'], thresholds=DEFAULT_THRESHOLDS):

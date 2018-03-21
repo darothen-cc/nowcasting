@@ -15,16 +15,22 @@ ylo, yhi = map(float, [ds.y.min(), ds.y.max()])
 ds = (
     ds
     # Smaller lat/lon box
-    .sel(x=slice(xhi-5, xhi), y=slice(yhi, yhi-3))
+    #.sel(x=slice(xhi-5, xhi), y=slice(yhi, yhi-3))
     # Single timestep
     .isel(time=slice(12, 13))
 )
 
 # Pre-process
 # 1) Median filter over time
+# print("Applying median filter")
 ds['refl_med'] = medfilt2d_dataarray(ds['refl'], 'time')
+# 2) Re-shape
+with ProgressBar():
+    da = ds['refl'].squeeze().compute()
+# 3) Threshold lowest level (superfluous?)
+da = da.where(da > 0.)
 
-# Create a storm tree -> need to grab a 2D slice for things to be kosher
-tree = create_storm_tree(ds['refl_med'].squeeze())
+print("Creating tree...")
+tree = create_storm_tree(da)
 print([v.nid for v in tree])
 
