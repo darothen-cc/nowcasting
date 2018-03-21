@@ -11,7 +11,7 @@ from skimage.color import label2rgb
 import xarray as xr
 
 #: Algorithm reflectivity level-set thresholds, in dBz
-_THRESHOLDS = [0, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+DEFAULT_THRESHOLDS = [0, 20, 25, 30, 35, 40, 45, 50, 55, 60]
 
 
 class Node(object):
@@ -98,7 +98,82 @@ class Node(object):
         return child
 
 
+def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
+    """ Recursively bisect an image to construct the Hou and Wang (2017)
+    tree based on a set of level-set thresholds
 
+    Parameters
+    ----------
+    image : ndarray
+        The image to use for calculating the level-set tree
+    thresholds : list of floats
+        Level-set boundary values
+
+    Returns
+    -------
+    A Node object containing the level-set tree for a given image
+
+    """
+
+    # Identify regions where we're below the lowest threshold
+    image_to_label = np.where(image >= thresholds[1], 1, 0)
+
+    # Initialize the head root node
+    root = Node(data='root')
+    root.nid = 0
+
+    counter = 1
+
+    def _fit_labels(image, i, parent):
+
+        global counter
+
+        if (np.product(image.shape) < 10) or (np.min(image.shape) == 1):
+            return parent
+
+        # Re-label this image
+        try:
+            _thresh_image = np.where(image >= thresholds[i], 1, 0)
+        except:
+            return parent
+
+        labels, n = label(_thresh_image, return_num=True)
+        image_label_overlay = label2rgb(labels, image=image)
+
+        if n > 0:
+            regions = regionprops(labels, intensity_image=image)
+            V = []
+            for region in regions:
+                _node = Node(parent, region)
+                _node.nid = counter
+                counter += 1
+                V.append(_node)
+            parent.children = V
+
+            for Vi in V:
+                # print(Vi.data.intensity_image.shape)
+                _fit_labels(Vi.data.intensity_image, i=i + 1, parent=Vi)
+
+        return parent
+
+    return _fit_labels(image, i=1, parent=root)
+
+
+def threshold_dataarray(da, coords=['y', 'x'], thresholds=DEFAULT_THRESHOLDS):
+    """ For a given DataArray, compute level-set areas and save as a new
+    dimension in the DataArray. """
+
+    Pis = [np.where(da >= gi, i, 0) for i, gi in enumerate(thresholds)]
+    Pis = np.stack(Pis)
+
+    new_coords = {'threshold': thresholds}
+    new_coords.update({k: da[k] for k in coords})
+
+    Pis_da = xr.DataArray(Pis, name='Pi',
+                          coords=new_coords,
+                          dims=['threshold'] + coords)
+
+    return Pis_da
 
 
 def medfilt2d_dataarray(da, dim='time', **kwargs):
@@ -126,7 +201,7 @@ def medfilt2d_dataarray(da, dim='time', **kwargs):
 
     return xr.apply_ufunc(looped_medfilt2d, da, kwargs=kwargs,
                           input_core_dims=[[dim, ]],
-                          output_core_dims=[[dim, ]]),
+                          output_core_dims=[[dim, ]],
                           dask='allowed')
 
 
