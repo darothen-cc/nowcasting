@@ -3,6 +3,8 @@ from Hou and Wang, 2017.
 
 """
 
+from itertools import chain
+
 import numpy as np
 from scipy.signal import medfilt2d
 from skimage.measure import label, regionprops
@@ -29,15 +31,16 @@ class Node(object):
 
     """
 
-    def __init__(self, parent=None, data={}):
+    def __init__(self, parent=None, **kw_attrs):
         self.parent = parent
         self.children = []
 
-        self._data = data
+        self._data = kw_attrs
+        self.__dict__.update(**self._data)
 
-    @property
-    def data(self):
-        return self._data
+    # @property
+    # def data(self):
+    #     return self._data
 
     def is_root(self):
         return self.parent is None
@@ -76,26 +79,33 @@ class Node(object):
         if not self.children:
             return 1
         else:
-            return 1 + np.max([child.depth() for child in self.children])
+            return 1 + np.max([child.tree_depth() for child in self.children])
 
-    @staticmethod
-    def find_deepest_child(tree):
+    def find_deepest_child(self):
         """ Bread-first search to find the node in a tree furthest from the root
         which still contains children. """
 
         md = 0
         child = None
 
-        if not tree.children:
+        if not self.children:
             return child
 
-        for c in tree.children:
-            deg = c.degree()
-            if deg > md:
-                md = deg
+        for c in self.children:
+            depth = c.tree_depth()
+            if depth > md:
+                md = depth
                 child = c
 
         return child
+
+    def __iter__(self):
+        """ Traverse the structure via the iterator protocol, for convenience """
+        for v in chain(
+            *map(iter, self.children)
+        ):
+            yield v
+        yield self
 
 
 def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
@@ -116,18 +126,17 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
     """
 
     # Identify regions where we're below the lowest threshold
-    image_to_label = np.where(image >= thresholds[1], 1, 0)
+    image_to_label = np.where(image >= thresholds[0], 1, 0)
 
     # Initialize the head root node
     root = Node(data='root')
     root.nid = 0
 
-    counter = 1
+    def _fit_labels(image, i, parent, count=1):
 
-    def _fit_labels(image, i, parent):
+        local_count = count+1
 
-        global counter
-
+        # Don't further segment if the region is small or contains no data.
         if (np.product(image.shape) < 10) or (np.min(image.shape) == 1):
             return parent
 
@@ -144,15 +153,18 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
             regions = regionprops(labels, intensity_image=image)
             V = []
             for region in regions:
-                _node = Node(parent, region)
-                _node.nid = counter
-                counter += 1
+                _node = Node(parent,
+                             region=region,
+                             image_label_overlay=image_label_overlay,
+                             nid=local_count)
+                local_count += 1
                 V.append(_node)
             parent.children = V
 
             for Vi in V:
-                # print(Vi.data.intensity_image.shape)
-                _fit_labels(Vi.data.intensity_image, i=i + 1, parent=Vi)
+                # print(Vi.nid, Vi.region.intensity_image.shape)
+                _fit_labels(Vi.region.intensity_image, i=i + 1, parent=Vi,
+                            count=local_count)
 
         return parent
 
