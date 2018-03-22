@@ -43,14 +43,16 @@ class Node(object):
     # def data(self):
     #     return self._data
 
+    @property
     def is_root(self):
         return self.parent is None
 
+    @property
     def is_leaf(self):
         return not self.children
 
     def is_ancestor(self, n):
-        if self.is_root():
+        if self.is_root:
             return False
         elif self.parent.equals(n):
             return True
@@ -67,26 +69,30 @@ class Node(object):
         else:
             return np.any([child.is_descendant(n) for child in self.children])
 
+    @property
     def count(self):
         counter = 0
         for _ in self:
             counter += 1
         return counter
 
+    @property
     def degree(self):
         return len(self.children)
 
+    @property
     def node_depth(self):
-        if self.is_root():
+        if self.is_root:
             return 1
         else:
-            return 1 + self.parent.node_depth()
+            return 1 + self.parent.node_depth
 
+    @property
     def tree_depth(self):
         if not self.children:
             return 1
         else:
-            return 1 + np.max([child.tree_depth() for child in self.children])
+            return 1 + np.max([child.tree_depth for child in self.children])
 
     def find_deepest_child(self):
         """ Bread-first search to find the node in a tree furthest from the root
@@ -99,7 +105,7 @@ class Node(object):
             return child
 
         for c in self.children:
-            depth = c.tree_depth()
+            depth = c.tree_depth
             if depth > md:
                 md = depth
                 child = c
@@ -110,7 +116,7 @@ class Node(object):
         """ Traverse the structure via the iterator protocol, for convenience """
 
         # Start with the root ...
-        if not self.is_root():
+        if not self.is_root:
             yield self
 
         # ... and continue on to the children
@@ -119,8 +125,12 @@ class Node(object):
         ):
             yield v
 
+    def __len__(self):
+        """ Length of a tree -> how many nodes it has """
+        return self.count
 
-def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
+
+def create_storm_tree(image, min_area=25, thresholds=DEFAULT_THRESHOLDS):
     """ Recursively bisect an image to construct the Hou and Wang (2017)
     tree based on a set of level-set thresholds. We assume that the user
     has already applied the lowest-level threshold (first element).
@@ -129,6 +139,9 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
     ----------
     image : ndarray
         The image to use for calculating the level-set tree
+    min_area : int
+        Minimum number of pixels permissible for a region to be included
+        as a stand-alone segment
     thresholds : list of floats
         Level-set boundary values
 
@@ -173,7 +186,7 @@ def create_storm_tree(image, thresholds=DEFAULT_THRESHOLDS):
                 # Don't further segment if the region is small or contains no data.
                 region_shape = region.intensity_image.shape
                 region_size = np.product(region_shape)
-                if (region_size < 10) or (np.min(region_shape) == 1):
+                if (region_size < min_area) or (np.min(region_shape) == 2):
                     continue
 
                 _node = Node(parent,
@@ -211,6 +224,73 @@ def threshold_dataarray(da, coords=['y', 'x'], thresholds=DEFAULT_THRESHOLDS):
                           dims=['threshold'] + coords)
 
     return Pis_da
+
+
+def find_storm_regions(tree):
+    """ Identify storm regions in a tree-parsed reflectivity image. """
+
+    storm_regions = set()
+    for node in tree:
+
+        # print(node.threshold, node.degree, node.parent.degree)
+
+        # root(T_sub) == 30 AND degree[root(T_sub)] <= 1, OR
+        # root(T_sub) == 35 AND degree{parent[root(T_sub)]} > 1
+        if (((node.threshold == 30) and (node.degree <= 1)) or
+            ((node.threshold == 35) and (node.parent.degree > 1))):
+            # print("CONVECTIVE STORM\n" + "--"*40)
+            for c in node.children:
+                storm_regions.add(c)
+
+    return storm_regions
+
+
+def find_storm_cells(tree):
+    """ Identify storm cells in a tree-parsed reflectivity image. """
+
+    storm_cells = set()
+    for node in tree:
+
+        # print(node.threshold, node.degree, node.parent.degree)
+
+        # root(T_sub) == 40 AND degree[root(T_sub)] <= 1, OR
+        # root(T_sub) == 45 AND degree{parent[root(T_sub)]} > 1
+        if (((node.threshold == 40) and (node.degree <= 1)) or
+            ((node.threshold == 45) and (node.parent.degree > 1))):
+            # print("CONVECTIVE REGION\n" + "--"*40)
+            for c in node.children:
+                storm_cells.add(c)
+
+    return storm_cells
+
+
+def find_stratiform_regions(tree):
+    """ Identify stratiform regions in a tree-parsed reflectivity image. """
+
+    stratiform_regions = []
+    for node in tree:
+
+        # root(T_sub) == 20)
+        if node.threshold > 20.:
+            continue
+
+        # Compute fractional area of region where 20 dBZ < reflectivity < 40 dBZ
+        total_area = node.region.area
+        area_over_40 = \
+            np.sum([
+                _n.region.area
+                for i, _n in enumerate(node)
+                if (_n.threshold > 40) and (i > 0)
+                # Note that we iterate over the *subtrees* here just by ignoring the
+                # first item returned by the iterable.
+            ])
+        area_over_20 = total_area - area_over_40
+        # print(total_area, area_over_40, area_over_40 / area_over_20)
+
+        if ((area_over_40 / area_over_20) < 0.3):
+            stratiform_regions.append(node)
+
+    return stratiform_regions
 
 
 def medfilt2d_dataarray(da, dim='time', **kwargs):
